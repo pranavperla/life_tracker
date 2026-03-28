@@ -1,0 +1,15 @@
+.env
+.env.local
+.venv/
+venv/
+data/
+backups/
+exports/
+__pycache__/
+*.pyc
+.DS_Store
+*.db
+*.db-journal
+life_tracker.log
+launchd_stdout.log
+launchd_stderr.log
