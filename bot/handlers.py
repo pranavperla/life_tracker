@@ -26,7 +26,7 @@ from parsers.food_parser import handle_food
 from bot.advisor import assess_purchase
 from bot.keyboards import zero_day_keyboard, recurring_confirm_keyboard
 from services.query_service import answer_question
-from services.fitbit_service import exchange_code, sync_recent
+from services.fitbit_service import exchange_code, get_auth_url, sync_recent
 
 logger = logging.getLogger(__name__)
 
@@ -84,6 +84,7 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "/undo — remove last entry\n"
         "/recurring — manage recurring expenses\n"
         "/fitbit — check Fitbit sync status\n"
+        "/fitbit_login — get the Fitbit authorization link (open this, not a bookmark)\n"
         "/fitbit_auth CODE — complete Fitbit login (paste OAuth code)\n"
         "/help — this message\n\n"
         "💬 **Or just chat naturally:**\n"
@@ -315,7 +316,7 @@ async def cmd_fitbit(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     latest = await models.get_latest_fitbit(db)
     if not latest:
         await update.message.reply_text(
-            "No Fitbit data yet. Make sure Fitbit OAuth is set up — check /help."
+            "No Fitbit data yet. Use /fitbit_login to open the auth link, then /fitbit_auth with the code."
         )
         return
 
@@ -346,15 +347,36 @@ async def cmd_fitbit(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 
 
 @_authorized
+async def cmd_fitbit_login(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Send the full Fitbit OAuth URL (must not open /oauth2/authorize without query params)."""
+    try:
+        url = get_auth_url()
+    except ValueError as exc:
+        await update.message.reply_text(f"⚠️ {exc}")
+        return
+
+    redir = (Config.FITBIT_REDIRECT_URI or "").strip()
+    await update.message.reply_text(
+        "1️⃣ Tap the link below (use this full link — do **not** open Fitbit’s authorize page from a bookmark or empty URL).\n\n"
+        f"{url}\n\n"
+        "2️⃣ Log in and allow access.\n"
+        "3️⃣ Your browser will try to open localhost — copy the **`code=`** value from the address bar.\n"
+        "4️⃣ Send: `/fitbit_auth` paste_that_code\n\n"
+        f"⚙️ On [dev.fitbit.com](https://dev.fitbit.com/apps), **Callback URL** must match exactly:\n`{redir}`",
+        parse_mode="Markdown",
+        disable_web_page_preview=True,
+    )
+
+
+@_authorized
 async def cmd_fitbit_auth(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Exchange Fitbit OAuth authorization code for tokens."""
     args = context.args or []
     if not args:
         await update.message.reply_text(
             "Usage: `/fitbit_auth YOUR_CODE`\n\n"
-            "After you open the Fitbit authorization URL from the README, your browser "
-            "redirects to a page that fails to load — that is normal. Copy the `code=` "
-            "value from the address bar and paste it here.",
+            "First run `/fitbit_login` and open the **full** link it gives you.\n"
+            "After you approve, copy the `code=` value from the redirect URL (localhost page error is OK).",
             parse_mode="Markdown",
         )
         return
@@ -371,7 +393,7 @@ async def cmd_fitbit_auth(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         return
 
     await update.message.reply_text("Connecting to Fitbit...")
-    ok = await exchange_code(code, db)
+    ok, err_detail = await exchange_code(code, db)
     if ok:
         n = await sync_recent(db, days=3)
         await update.message.reply_text(
@@ -379,7 +401,12 @@ async def cmd_fitbit_auth(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         )
     else:
         await update.message.reply_text(
-            "❌ Could not exchange that code. It may have expired — generate a new auth URL and try again."
+            "❌ Fitbit rejected the token exchange. Common causes:\n"
+            "• Code expired (open a **new** link from `/fitbit_login` and paste the code immediately)\n"
+            "• **Callback URL** on dev.fitbit.com does not match `FITBIT_REDIRECT_URI` in `.env`\n"
+            "• Wrong `FITBIT_CLIENT_SECRET`\n\n"
+            f"Fitbit said: `{err_detail[:500]}`",
+            parse_mode="Markdown",
         )
 
 
@@ -590,6 +617,7 @@ def register_handlers(app: Application, db: Database) -> None:
     app.add_handler(CommandHandler("undo", cmd_undo))
     app.add_handler(CommandHandler("recurring", cmd_recurring))
     app.add_handler(CommandHandler("fitbit", cmd_fitbit))
+    app.add_handler(CommandHandler("fitbit_login", cmd_fitbit_login))
     app.add_handler(CommandHandler("fitbit_auth", cmd_fitbit_auth))
     app.add_handler(CommandHandler("trends", cmd_trends))
     app.add_handler(CommandHandler("insights", cmd_insights))

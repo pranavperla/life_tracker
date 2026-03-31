@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import time
 import logging
 from datetime import date, timedelta
@@ -23,18 +24,48 @@ SCOPES = "activity heartrate sleep profile oxygen_saturation temperature"
 
 
 def get_auth_url() -> str:
-    params = {
-        "response_type": "code",
-        "client_id": Config.FITBIT_CLIENT_ID,
-        "redirect_uri": Config.FITBIT_REDIRECT_URI,
-        "scope": SCOPES,
-        "expires_in": "31536000",  # 1 year
-    }
+    """
+    Build Fitbit OAuth2 authorize URL. Must include ?response_type=code&client_id=... or
+    Fitbit shows: invalid_request - Missing response_type parameter value (usually means
+    the browser opened /oauth2/authorize with no query string — use the full URL only).
+    """
+    cid = (Config.FITBIT_CLIENT_ID or "").strip()
+    redir = (Config.FITBIT_REDIRECT_URI or "").strip()
+    if not cid:
+        raise ValueError(
+            "FITBIT_CLIENT_ID is empty. Copy Client ID from dev.fitbit.com into .env"
+        )
+    if not redir:
+        raise ValueError("FITBIT_REDIRECT_URI is empty in .env")
+
+    # Tuple order is preserved — response_type must be present for Fitbit
+    params = [
+        ("response_type", "code"),
+        ("client_id", cid),
+        ("redirect_uri", redir),
+        ("scope", SCOPES),
+        # Valid per Fitbit: 86400, 604800, 2592000, 31536000
+        ("expires_in", "31536000"),
+    ]
     return f"{AUTH_URL}?{urlencode(params)}"
 
 
-async def exchange_code(code: str, db: Database) -> bool:
-    """Exchange authorization code for access/refresh tokens."""
+def _fitbit_error_message(status: int, raw: str) -> str:
+    """Short string for Telegram when token exchange fails."""
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        return f"HTTP {status}: {raw[:280]}"
+    errs = data.get("errors")
+    if isinstance(errs, list) and errs:
+        msg = errs[0].get("message") or errs[0].get("errorType")
+        if msg:
+            return str(msg)[:400]
+    return (data.get("error_description") or data.get("error") or raw)[:400]
+
+
+async def exchange_code(code: str, db: Database) -> tuple[bool, str]:
+    """Exchange authorization code for access/refresh tokens. Returns (ok, error_detail)."""
     data = {
         "client_id": Config.FITBIT_CLIENT_ID,
         "grant_type": "authorization_code",
@@ -46,10 +77,11 @@ async def exchange_code(code: str, db: Database) -> bool:
     async with aiohttp.ClientSession() as session:
         auth = aiohttp.BasicAuth(Config.FITBIT_CLIENT_ID, Config.FITBIT_CLIENT_SECRET)
         async with session.post(TOKEN_URL, data=data, headers=headers, auth=auth) as resp:
+            raw = await resp.text()
             if resp.status != 200:
-                logger.error("Fitbit token exchange failed: %s", await resp.text())
-                return False
-            body = await resp.json()
+                logger.error("Fitbit token exchange failed: %s", raw)
+                return False, _fitbit_error_message(resp.status, raw)
+            body = json.loads(raw)
 
     await models.save_fitbit_tokens(
         db,
@@ -58,7 +90,7 @@ async def exchange_code(code: str, db: Database) -> bool:
         expires_at=time.time() + body.get("expires_in", 28800),
     )
     logger.info("Fitbit tokens saved successfully")
-    return True
+    return True, ""
 
 
 async def _get_valid_token(db: Database) -> str | None:

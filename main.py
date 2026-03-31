@@ -21,6 +21,10 @@ logging.basicConfig(
         logging.FileHandler(Config.BASE_DIR / "life_tracker.log"),
     ],
 )
+# Avoid httpx/httpcore INFO logs — they include the full Telegram API URL with the bot token.
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
+
 logger = logging.getLogger(__name__)
 
 
@@ -40,6 +44,7 @@ async def post_init(app):
         ("undo", "Remove last entry"),
         ("recurring", "Recurring expenses"),
         ("fitbit", "Fitbit sync status"),
+        ("fitbit_login", "Get Fitbit OAuth link"),
         ("fitbit_auth", "Complete Fitbit OAuth with code"),
     ]
     await app.bot.set_my_commands(commands)

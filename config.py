@@ -10,13 +10,18 @@ BASE_DIR = Path(__file__).resolve().parent
 
 
 class Config:
+    """App configuration from environment. BASE_DIR is the project root."""
+
+    BASE_DIR = Path(__file__).resolve().parent
+
     # Telegram
     TELEGRAM_BOT_TOKEN: str = os.environ["TELEGRAM_BOT_TOKEN"]
     TELEGRAM_USER_ID: int = int(os.environ["TELEGRAM_USER_ID"])
 
-    # Gemini
+    # Gemini (use a model your API key can access; see AI Studio → Models)
     GEMINI_API_KEY: str = os.environ["GEMINI_API_KEY"]
-    GEMINI_MODEL: str = "gemini-2.0-flash"
+    # gemini-2.0-flash may 404 for new keys ("no longer available to new users") or hit free_tier quota:0
+    GEMINI_MODEL: str = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
 
     # Fitbit
     FITBIT_CLIENT_ID: str = os.getenv("FITBIT_CLIENT_ID", "")

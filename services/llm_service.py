@@ -117,6 +117,12 @@ Tables and columns:
 All dates are in YYYY-MM-DD format. Use SQLite date functions.
 For lending queries: expenses with category='Lending' are loans given, income with person matching is paybacks.
 
+**Money spent on food / groceries / delivery / dining (Zomato, Swiggy, etc.):**
+Query the **expenses** table only. Rupee spending uses categories: **'Food Delivery'**, **'Groceries'**, **'Dining Out'**, and sometimes **'Food & Groceries'**. Do NOT use category = 'Food' (that value is not used). Do NOT query **food_log** for money — food_log is only for meal/journal entries (calories), not expenses.
+
+Example (spending on food this calendar month): 
+SELECT COALESCE(SUM(amount), 0) AS total FROM expenses WHERE substr(date, 1, 7) = strftime('%Y-%m', 'now') AND category IN ('Food Delivery', 'Groceries', 'Dining Out', 'Food & Groceries');
+
 Respond with ONLY valid JSON: {"sql": "SELECT ...", "explanation": "brief explanation"}
 ONLY SELECT queries. Never INSERT/UPDATE/DELETE/DROP."""
 
