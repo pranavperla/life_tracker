@@ -86,7 +86,7 @@ split: {"intent": "split", "total_amount": number, "split_count": number, "descr
 command: {"intent": "command"}
 unknown: {"intent": "unknown"}
 
-Categories to use: Food & Groceries, Food Delivery, Groceries, Dining Out, Transport, Fuel, Cab/Auto, Public Transport, Housing, Rent, Utilities, Maintenance, Shopping, Electronics, Clothing, Subscriptions, Entertainment, Health, Education, Lending, Personal Care, Miscellaneous"""
+Categories to use: Food & Groceries, Food Delivery, Groceries, Dining Out, Transport, Fuel, Cab/Auto, Public Transport, Housing, Rent, Utilities, Maintenance, Shopping, Electronics, Clothing, Credit Card Bill, Subscriptions, Entertainment, Outings, Health, Education, Lending, Personal Care, Miscellaneous"""
 
 
 async def classify_message(message: str, today: str) -> dict:
@@ -113,6 +113,8 @@ Tables and columns:
 - budgets: id, category, monthly_limit, month_year
 - tracking_days: id, date, has_expenses, confirmed_zero_day
 - recurring_expenses: id, description, amount, category, day_of_month, last_confirmed, active
+- fixed_expenses: id, name, amount, category, scheduled_amount, scheduled_from (planned monthly bills)
+- user_finance_profile: monthly_income (singleton id=1)
 
 All dates are in YYYY-MM-DD format. Use SQLite date functions.
 For lending queries: expenses with category='Lending' are loans given, income with person matching is paybacks.

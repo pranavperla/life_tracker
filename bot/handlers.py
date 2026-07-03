@@ -26,6 +26,13 @@ from parsers.food_parser import handle_food
 from bot.advisor import assess_purchase
 from bot.keyboards import zero_day_keyboard, recurring_confirm_keyboard
 from services.query_service import answer_question
+from services.fixed_expenses_service import (
+    build_monthly_plan,
+    ensure_defaults,
+    format_plan_message,
+    remove_fixed,
+    set_fixed_amount,
+)
 from services.fitbit_service import exchange_code, get_auth_url, sync_recent
 
 logger = logging.getLogger(__name__)
@@ -76,13 +83,18 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "/week — this week's summary\n"
         "/month — monthly breakdown\n"
         "/export — get Excel file\n"
-        "/budget set 50000 — set monthly budget\n"
+        "/budget set 36400 — set monthly tracked-spend budget\n"
         "/budget food 15000 — set category budget\n"
         "/income — view income & savings rate\n"
         "/trends — spending trends & anomalies\n"
         "/insights — deep cross-domain analysis\n"
         "/undo — remove last entry\n"
         "/recurring — manage recurring expenses\n"
+        "/fixed — fixed bills & flexible spending left\n"
+        "/fixed income 70000 — update monthly salary\n"
+        "/fixed set 3 14000 — change amount (use id from /fixed)\n"
+        "/fixed set 2 from 2026-04 14000 — scheduled increase\n"
+        "/fixed remove 3 — remove a fixed bill\n"
         "/fitbit — check Fitbit sync status\n"
         "/fitbit_login — get the Fitbit authorization link (open this, not a bookmark)\n"
         "/fitbit_auth CODE — complete Fitbit login (paste OAuth code)\n"
@@ -110,10 +122,10 @@ async def cmd_summary(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     fitbit = await models.get_fitbit_for_date(db, yesterday)
 
     month_start = date.today().replace(day=1).isoformat()
-    month_total = await models.get_total_expenses(db, month_start, today)
     month_year = date.today().strftime("%Y-%m")
+    plan = await build_monthly_plan(db, month_year)
     budget_row = await models.get_budget(db, "total", month_year)
-    budget = budget_row.get("monthly_limit", Config.DEFAULT_MONTHLY_BUDGET) if budget_row else Config.DEFAULT_MONTHLY_BUDGET
+    budget = budget_row.get("monthly_limit", plan["flexible_budget"]) if budget_row else plan["flexible_budget"]
 
     parts = [f"📊 **Today's Summary** ({today})\n"]
 
@@ -125,8 +137,16 @@ async def cmd_summary(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     else:
         parts.append("💰 No expenses logged today")
 
-    parts.append(f"\n📅 Month so far: ₹{month_total:,.0f} / ₹{budget:,.0f} "
-                 f"(₹{budget - month_total:,.0f} remaining)")
+    parts.append(
+        f"\n📅 Tracked spend this month: ₹{plan['flexible_spent']:,.0f} / ₹{budget:,.0f} "
+        f"(₹{budget - plan['flexible_spent']:,.0f} remaining)"
+    )
+
+    parts.append(
+        f"\n🎯 Flexible pool left: ₹{plan['flexible_left']:,.0f} "
+        f"(of ₹{plan['flexible_budget']:,.0f} after fixed bills)\n"
+        f"   Use /fixed for full breakdown"
+    )
 
     # Food
     if food:
@@ -186,17 +206,20 @@ async def cmd_month(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     income = await models.get_total_income(db, month_start, month_end)
     categories = await models.get_expenses_by_category(db, month_start, month_end)
 
+    plan = await build_monthly_plan(db, month_year)
     budget_row = await models.get_budget(db, "total", month_year)
-    budget = budget_row.get("monthly_limit", Config.DEFAULT_MONTHLY_BUDGET) if budget_row else Config.DEFAULT_MONTHLY_BUDGET
+    budget = budget_row.get("monthly_limit", plan["flexible_budget"]) if budget_row else plan["flexible_budget"]
 
-    savings_rate = ((income - total) / income * 100) if income > 0 else 0
     tracked = await models.get_tracked_days(db, month_start, month_end)
 
     parts = [f"📊 **{today.strftime('%B %Y')}**\n"]
-    parts.append(f"💰 Spent: ₹{total:,.0f} / ₹{budget:,.0f}")
-    parts.append(f"📥 Income: ₹{income:,.0f}")
-    parts.append(f"💵 Remaining budget: ₹{budget - total:,.0f}")
+    parts.append(f"💰 Tracked spend: ₹{plan['flexible_spent']:,.0f} / ₹{budget:,.0f}")
+    parts.append(f"💼 Salary base: ₹{plan['income']:,.0f}")
     if income > 0:
+        parts.append(f"📥 Logged income: ₹{income:,.0f}")
+    parts.append(f"💵 Remaining tracked budget: ₹{budget - plan['flexible_spent']:,.0f}")
+    if income > 0:
+        savings_rate = ((income - total) / income * 100) if income > 0 else 0
         parts.append(f"📈 Savings rate: {savings_rate:.1f}%")
     parts.append(f"📅 Days tracked: {len(tracked)}/{today.day}")
 
@@ -206,20 +229,141 @@ async def cmd_month(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             pct = (c["total"] / total * 100) if total > 0 else 0
             parts.append(f"  • {c['category']}: ₹{c['total']:,.0f} ({pct:.0f}%)")
 
+    parts.append(
+        f"\n🔒 Fixed commitments: ₹{plan['fixed_total']:,.0f}\n"
+        f"🎯 Flexible pool: ₹{plan['flexible_spent']:,.0f} spent, "
+        f"₹{plan['flexible_left']:,.0f} left\n"
+        f"   (/fixed for line-by-line)"
+    )
+
     await update.message.reply_text("\n".join(parts), parse_mode="Markdown")
+
+
+@_authorized
+async def cmd_fixed(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Show fixed monthly bills and flexible spending pool."""
+    db = get_db(context)
+    await ensure_defaults(db)
+    args = context.args or []
+
+    if args and args[0].lower() == "income":
+        if len(args) < 2:
+            await update.message.reply_text("Usage: `/fixed income 70000`", parse_mode="Markdown")
+            return
+        try:
+            amount = float(args[1].replace(",", ""))
+        except ValueError:
+            await update.message.reply_text("Income must be a number, e.g. 70000")
+            return
+        await models.set_monthly_income(db, amount)
+        plan = await build_monthly_plan(db)
+        await update.message.reply_text(
+            f"✅ Monthly income set to ₹{amount:,.0f}\n\n{format_plan_message(plan)}",
+            parse_mode="Markdown",
+        )
+        return
+
+    if args and args[0].lower() == "add":
+        if len(args) < 4:
+            await update.message.reply_text(
+                "Usage: `/fixed add NAME AMOUNT CATEGORY`\n"
+                "Example: `/fixed add Gym 1500 Health`",
+                parse_mode="Markdown",
+            )
+            return
+        try:
+            amt = float(args[-2].replace(",", ""))
+        except ValueError:
+            await update.message.reply_text("Amount must be a number")
+            return
+        category = args[-1]
+        name = " ".join(args[1:-2])
+        await models.add_fixed_expense(db, name=name, amount=amt, category=category, day_of_month=1)
+        await models.add_recurring(
+            db, description=name, amount=amt, category=category, day_of_month=1
+        )
+        plan = await build_monthly_plan(db)
+        await update.message.reply_text(
+            f"✅ Added fixed expense: {name}\n\n{format_plan_message(plan)}",
+            parse_mode="Markdown",
+        )
+        return
+
+    if args and args[0].lower() == "set":
+        if len(args) < 3:
+            await update.message.reply_text(
+                "Usage:\n"
+                "`/fixed set ID AMOUNT` — change monthly amount\n"
+                "`/fixed set ID from YYYY-MM AMOUNT` — raise from a month (e.g. rent)\n"
+                "Ids are shown on `/fixed` as **#3**.",
+                parse_mode="Markdown",
+            )
+            return
+        try:
+            fixed_id = int(args[1])
+        except ValueError:
+            await update.message.reply_text("First argument after `set` must be the numeric id (e.g. 3).")
+            return
+        if args[2].lower() == "from":
+            if len(args) < 5:
+                await update.message.reply_text("Usage: `/fixed set 2 from 2026-04 14000`", parse_mode="Markdown")
+                return
+            try:
+                amt = float(args[4].replace(",", ""))
+            except ValueError:
+                await update.message.reply_text("Amount must be a number")
+                return
+            ok, msg = await set_fixed_amount(
+                db, fixed_id, amt, scheduled_from=args[3], as_scheduled=True
+            )
+        else:
+            try:
+                amt = float(args[2].replace(",", ""))
+            except ValueError:
+                await update.message.reply_text("Amount must be a number")
+                return
+            ok, msg = await set_fixed_amount(db, fixed_id, amt)
+        plan = await build_monthly_plan(db)
+        prefix = f"✅ {msg}\n\n" if ok else f"⚠️ {msg}\n\n"
+        await update.message.reply_text(
+            prefix + format_plan_message(plan), parse_mode="Markdown"
+        )
+        return
+
+    if args and args[0].lower() in ("remove", "rm", "delete"):
+        if len(args) < 2:
+            await update.message.reply_text("Usage: `/fixed remove 3`", parse_mode="Markdown")
+            return
+        try:
+            fixed_id = int(args[1])
+        except ValueError:
+            await update.message.reply_text("Use the numeric id from `/fixed` (e.g. `/fixed remove 3`).")
+            return
+        ok, msg = await remove_fixed(db, fixed_id)
+        plan = await build_monthly_plan(db)
+        prefix = f"✅ {msg}\n\n" if ok else f"⚠️ {msg}\n\n"
+        await update.message.reply_text(
+            prefix + format_plan_message(plan), parse_mode="Markdown"
+        )
+        return
+
+    plan = await build_monthly_plan(db)
+    await update.message.reply_text(format_plan_message(plan), parse_mode="Markdown")
 
 
 @_authorized
 async def cmd_budget(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     db = get_db(context)
+    await ensure_defaults(db)
     args = context.args or []
     month_year = date.today().strftime("%Y-%m")
+    plan = await build_monthly_plan(db, month_year)
 
     if len(args) >= 2 and args[0].lower() == "set":
         try:
             limit = float(args[1].replace(",", ""))
         except ValueError:
-            await update.message.reply_text("Usage: /budget set 50000")
+            await update.message.reply_text("Usage: /budget set 36400")
             return
         await models.set_budget(db, "total", limit, month_year)
         await update.message.reply_text(f"✅ Monthly budget set to ₹{limit:,.0f}")
@@ -243,8 +387,8 @@ async def cmd_budget(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
             await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
         else:
             await update.message.reply_text(
-                f"No budgets set. Default: ₹{Config.DEFAULT_MONTHLY_BUDGET:,.0f}\n"
-                "Set one: /budget set 50000"
+                f"No budgets set. Default tracked-spend budget: ₹{plan['flexible_budget']:,.0f}\n"
+                "Set one: /budget set 36400"
             )
 
 
@@ -616,6 +760,7 @@ def register_handlers(app: Application, db: Database) -> None:
     app.add_handler(CommandHandler("income", cmd_income))
     app.add_handler(CommandHandler("undo", cmd_undo))
     app.add_handler(CommandHandler("recurring", cmd_recurring))
+    app.add_handler(CommandHandler("fixed", cmd_fixed))
     app.add_handler(CommandHandler("fitbit", cmd_fitbit))
     app.add_handler(CommandHandler("fitbit_login", cmd_fitbit_login))
     app.add_handler(CommandHandler("fitbit_auth", cmd_fitbit_auth))

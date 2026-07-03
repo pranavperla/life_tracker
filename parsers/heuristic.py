@@ -12,9 +12,11 @@ _MERCHANT_CATEGORIES: list[tuple[list[str], str]] = [
     (["metro", "bus", "irctc", "railway"], "Public Transport"),
     (["shell", "petrol", "fuel", "bharat", "hpcl", "iocl"], "Fuel"),
     (["netflix", "spotify", "prime video", "hotstar", "youtube premium"], "Subscriptions"),
+    (["credit card", "card bill", "cc bill"], "Credit Card Bill"),
     (["amazon", "flipkart", "myntra", "nykaa"], "Shopping"),
-    (["bigbasket", "grofers", "dmart", "reliance fresh"], "Groceries"),
+    (["bigbasket", "grofers", "dmart", "reliance fresh", "grocery", "groceries"], "Groceries"),
     (["cafe", "starbucks", "costa"], "Dining Out"),
+    (["outing", "outings", "movie", "movies", "pub", "bar"], "Outings"),
     (["rent", "landlord", "housing"], "Rent"),
     (["electricity", "bescom", "mseb", "utility"], "Utilities"),
 ]

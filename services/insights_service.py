@@ -48,13 +48,13 @@ async def _gather_daily_data(db: Database) -> dict:
     expenses_today = await models.get_expenses_for_date(db, today)
     food_today = await models.get_food_for_date(db, today)
     fitbit_yesterday = await models.get_fitbit_for_date(db, yesterday)
-    month_total = await models.get_total_expenses(db, month_start, month_end)
     month_categories = await models.get_expenses_by_category(db, month_start, month_end)
 
-    from config import Config
+    from services.fixed_expenses_service import build_monthly_plan
     month_year = date.today().strftime("%Y-%m")
+    plan = await build_monthly_plan(db, month_year)
     budget_row = await models.get_budget(db, "total", month_year)
-    budget = budget_row.get("monthly_limit", Config.DEFAULT_MONTHLY_BUDGET) if budget_row else Config.DEFAULT_MONTHLY_BUDGET
+    budget = budget_row.get("monthly_limit", plan["flexible_budget"]) if budget_row else plan["flexible_budget"]
 
     return {
         "date": today,
@@ -62,9 +62,9 @@ async def _gather_daily_data(db: Database) -> dict:
         "total_today": sum(e["amount"] for e in expenses_today),
         "food_today": food_today,
         "fitbit_yesterday": fitbit_yesterday,
-        "month_total": month_total,
+        "month_total": plan["flexible_spent"],
         "month_budget": budget,
-        "month_remaining": budget - month_total,
+        "month_remaining": budget - plan["flexible_spent"],
         "month_categories": month_categories,
     }
 

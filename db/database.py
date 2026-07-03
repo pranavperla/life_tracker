@@ -3,7 +3,32 @@ from __future__ import annotations
 import aiosqlite
 from pathlib import Path
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
+
+MIGRATION_V2_SQL = """
+CREATE TABLE IF NOT EXISTS user_finance_profile (
+    id              INTEGER PRIMARY KEY CHECK (id = 1),
+    monthly_income  REAL    NOT NULL,
+    updated_at      TEXT    NOT NULL DEFAULT (datetime('now','localtime'))
+);
+
+CREATE TABLE IF NOT EXISTS fixed_expenses (
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    name             TEXT    NOT NULL,
+    amount           REAL    NOT NULL,
+    category         TEXT    NOT NULL,
+    day_of_month     INTEGER,
+    scheduled_amount REAL,
+    scheduled_from   TEXT,
+    notes            TEXT,
+    sort_order       INTEGER NOT NULL DEFAULT 0,
+    active           INTEGER NOT NULL DEFAULT 1
+);
+
+INSERT OR IGNORE INTO categories (name, parent_category, is_custom) VALUES
+    ('Family Transfer', 'Housing', 1),
+    ('Household Help', 'Housing', 1);
+"""
 
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS expenses (
@@ -99,6 +124,25 @@ CREATE TABLE IF NOT EXISTS fitbit_tokens (
     expires_at    REAL    NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS user_finance_profile (
+    id              INTEGER PRIMARY KEY CHECK (id = 1),
+    monthly_income  REAL    NOT NULL,
+    updated_at      TEXT    NOT NULL DEFAULT (datetime('now','localtime'))
+);
+
+CREATE TABLE IF NOT EXISTS fixed_expenses (
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    name             TEXT    NOT NULL,
+    amount           REAL    NOT NULL,
+    category         TEXT    NOT NULL,
+    day_of_month     INTEGER,
+    scheduled_amount REAL,
+    scheduled_from   TEXT,
+    notes            TEXT,
+    sort_order       INTEGER NOT NULL DEFAULT 0,
+    active           INTEGER NOT NULL DEFAULT 1
+);
+
 CREATE TABLE IF NOT EXISTS schema_version (
     version INTEGER NOT NULL
 );
@@ -120,13 +164,17 @@ INSERT OR IGNORE INTO categories (name, parent_category, is_custom) VALUES
     ('Shopping', NULL, 0),
     ('Electronics', 'Shopping', 0),
     ('Clothing', 'Shopping', 0),
+    ('Credit Card Bill', NULL, 0),
     ('Subscriptions', NULL, 0),
     ('Entertainment', NULL, 0),
+    ('Outings', 'Entertainment', 0),
     ('Health', NULL, 0),
     ('Education', NULL, 0),
     ('Lending', NULL, 0),
     ('Personal Care', NULL, 0),
-    ('Miscellaneous', NULL, 0);
+    ('Miscellaneous', NULL, 0),
+    ('Family Transfer', 'Housing', 1),
+    ('Household Help', 'Housing', 1);
 """
 
 
@@ -151,6 +199,16 @@ class Database:
                 "INSERT INTO schema_version (version) VALUES (?)", (SCHEMA_VERSION,)
             )
         await self._db.commit()
+        await self._migrate()
+
+    async def _migrate(self) -> None:
+        cur = await self._db.execute("SELECT version FROM schema_version LIMIT 1")
+        row = await cur.fetchone()
+        version = row[0] if row else 1
+        if version < 2:
+            await self._db.executescript(MIGRATION_V2_SQL)
+            await self._db.execute("UPDATE schema_version SET version = 2")
+            await self._db.commit()
 
     async def close(self) -> None:
         if self._db:

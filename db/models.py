@@ -322,6 +322,151 @@ async def deactivate_recurring(db: Database, rec_id: int) -> None:
     await db.db.commit()
 
 
+async def get_total_expenses_in_categories(
+    db: Database, start: str, end: str, categories: list[str]
+) -> float:
+    if not categories:
+        return 0.0
+    placeholders = ",".join("?" * len(categories))
+    cur = await db.db.execute(
+        f"""SELECT COALESCE(SUM(amount), 0) AS total FROM expenses
+            WHERE date BETWEEN ? AND ? AND category IN ({placeholders})""",
+        (start, end, *categories),
+    )
+    row = await cur.fetchone()
+    return float(row["total"]) if row else 0.0
+
+
+# ---------------------------------------------------------------------------
+# Finance profile & fixed monthly expenses
+# ---------------------------------------------------------------------------
+
+async def ensure_finance_profile(db: Database, monthly_income: float) -> None:
+    await db.db.execute(
+        """INSERT INTO user_finance_profile (id, monthly_income)
+           VALUES (1, ?)
+           ON CONFLICT(id) DO NOTHING""",
+        (monthly_income,),
+    )
+    await db.db.commit()
+
+
+async def set_monthly_income(db: Database, amount: float) -> None:
+    await db.db.execute(
+        """INSERT INTO user_finance_profile (id, monthly_income, updated_at)
+           VALUES (1, ?, datetime('now','localtime'))
+           ON CONFLICT(id) DO UPDATE SET
+             monthly_income = excluded.monthly_income,
+             updated_at = excluded.updated_at""",
+        (amount,),
+    )
+    await db.db.commit()
+
+
+async def get_finance_profile(db: Database) -> dict:
+    cur = await db.db.execute("SELECT * FROM user_finance_profile WHERE id = 1")
+    return _row_to_dict(await cur.fetchone())
+
+
+async def add_fixed_expense(
+    db: Database,
+    *,
+    name: str,
+    amount: float,
+    category: str,
+    day_of_month: int | None = None,
+    scheduled_amount: float | None = None,
+    scheduled_from: str | None = None,
+    notes: str | None = None,
+    sort_order: int = 0,
+) -> dict:
+    cur = await db.db.execute(
+        """INSERT INTO fixed_expenses
+           (name, amount, category, day_of_month, scheduled_amount, scheduled_from, notes, sort_order)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+        (
+            name,
+            amount,
+            category,
+            day_of_month,
+            scheduled_amount,
+            scheduled_from,
+            notes,
+            sort_order,
+        ),
+    )
+    await db.db.commit()
+    return {"id": cur.lastrowid, "name": name, "amount": amount}
+
+
+async def get_active_fixed_expenses(db: Database) -> list[dict]:
+    cur = await db.db.execute(
+        "SELECT * FROM fixed_expenses WHERE active = 1 ORDER BY sort_order, name"
+    )
+    return _rows_to_list(await cur.fetchall())
+
+
+async def get_fixed_expense(db: Database, fixed_id: int) -> dict:
+    cur = await db.db.execute(
+        "SELECT * FROM fixed_expenses WHERE id = ? AND active = 1", (fixed_id,)
+    )
+    return _row_to_dict(await cur.fetchone())
+
+
+async def get_fixed_expense_by_id(db: Database, fixed_id: int) -> dict:
+    cur = await db.db.execute("SELECT * FROM fixed_expenses WHERE id = ?", (fixed_id,))
+    return _row_to_dict(await cur.fetchone())
+
+
+async def sync_recurring_for_fixed_name(
+    db: Database, name: str, amount: float, category: str | None = None
+) -> None:
+    if category is not None:
+        await db.db.execute(
+            """UPDATE recurring_expenses SET amount = ?, category = ?
+               WHERE description = ? AND active = 1""",
+            (amount, category, name),
+        )
+    else:
+        await db.db.execute(
+            "UPDATE recurring_expenses SET amount = ? WHERE description = ? AND active = 1",
+            (amount, name),
+        )
+    await db.db.commit()
+
+
+async def deactivate_recurring_by_name(db: Database, name: str) -> None:
+    await db.db.execute(
+        "UPDATE recurring_expenses SET active = 0 WHERE description = ?", (name,)
+    )
+    await db.db.commit()
+
+
+async def update_fixed_expense(db: Database, fixed_id: int, **fields: Any) -> None:
+    allowed = {
+        "name",
+        "amount",
+        "category",
+        "day_of_month",
+        "scheduled_amount",
+        "scheduled_from",
+        "notes",
+        "sort_order",
+        "active",
+    }
+    updates = {k: v for k, v in fields.items() if k in allowed}
+    if not updates:
+        return
+    sets = ", ".join(f"{k} = ?" for k in updates)
+    vals = list(updates.values()) + [fixed_id]
+    await db.db.execute(f"UPDATE fixed_expenses SET {sets} WHERE id = ?", vals)
+    await db.db.commit()
+
+
+async def deactivate_fixed_expense(db: Database, fixed_id: int) -> None:
+    await update_fixed_expense(db, fixed_id, active=0)
+
+
 # ---------------------------------------------------------------------------
 # Tracking days
 # ---------------------------------------------------------------------------
