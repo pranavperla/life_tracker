@@ -83,7 +83,7 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "/week — this week's summary\n"
         "/month — monthly breakdown\n"
         "/export — get Excel file\n"
-        "/budget set 36400 — set monthly tracked-spend budget\n"
+        "/budget set 44400 — set monthly tracked-spend budget\n"
         "/budget food 15000 — set category budget\n"
         "/income — view income & savings rate\n"
         "/trends — spending trends & anomalies\n"
@@ -363,7 +363,7 @@ async def cmd_budget(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         try:
             limit = float(args[1].replace(",", ""))
         except ValueError:
-            await update.message.reply_text("Usage: /budget set 36400")
+            await update.message.reply_text("Usage: /budget set 44400")
             return
         await models.set_budget(db, "total", limit, month_year)
         await update.message.reply_text(f"✅ Monthly budget set to ₹{limit:,.0f}")
@@ -388,7 +388,7 @@ async def cmd_budget(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         else:
             await update.message.reply_text(
                 f"No budgets set. Default tracked-spend budget: ₹{plan['flexible_budget']:,.0f}\n"
-                "Set one: /budget set 36400"
+                "Set one: /budget set 44400"
             )
 
 

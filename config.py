@@ -37,7 +37,7 @@ class Config:
 
     # Defaults
     DEFAULT_CURRENCY: str = os.getenv("DEFAULT_CURRENCY", "INR")
-    DEFAULT_MONTHLY_BUDGET: int = int(os.getenv("DEFAULT_MONTHLY_BUDGET", "36400"))
+    DEFAULT_MONTHLY_BUDGET: int = int(os.getenv("DEFAULT_MONTHLY_BUDGET", "44400"))
     MONTHLY_INCOME: float = float(os.getenv("MONTHLY_INCOME", "70000"))
 
     # Schedule

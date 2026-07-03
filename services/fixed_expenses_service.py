@@ -30,7 +30,7 @@ FLEXIBLE_CATEGORIES = (
 DEFAULT_FIXED_EXPENSES: list[dict] = [
     {
         "name": "Rent",
-        "amount": 22_000,
+        "amount": 14_000,
         "category": "Rent",
         "day_of_month": 1,
         "scheduled_amount": None,
